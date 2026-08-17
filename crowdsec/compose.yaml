@@ -1,0 +1,18 @@
+services:
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    restart: unless-stopped
+    environment:
+      - GID=${PGID}
+      - COLLECTIONS=crowdsecurity/linux crowdsecurity/iptables crowdsecurity/caddy crowdsecurity/http-cve
+      - LAPI_LISTEN_ADDR=0.0.0.0:8085
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./acquis.yaml:/etc/crowdsec/acquis.yaml
+      - ./parsers/s02-enrich/jof-trusted-networks.yaml:/etc/crowdsec/parsers/s02-enrich/jof-trusted-networks.yaml:ro
+      - /home/jonathan/data/crowdsec/data:/var/lib/crowdsec/data
+      - /home/jonathan/data/crowdsec/config:/etc/crowdsec
+      - /var/log:/var/log:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    network_mode: host

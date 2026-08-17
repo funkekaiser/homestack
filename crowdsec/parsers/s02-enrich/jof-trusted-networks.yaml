@@ -1,0 +1,13 @@
+name: jof/trusted-networks
+description: "Whitelist LAN, tailnet, and Docker networks"
+whitelist:
+  reason: "trusted internal networks"
+  ip:
+    - "127.0.0.1"
+    - "::1"
+  cidr:
+    - "192.168.0.0/24"
+    - "100.64.0.0/10"
+    - "fd7a:115c:a1e0::/48"
+    - "172.16.0.0/12"
+    - "10.0.0.0/8"

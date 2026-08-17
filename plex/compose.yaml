@@ -1,0 +1,112 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Plex stack: Plex + its Cloudflare DDNS helper.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  # ── Media servers ──────────────────────────────────────────────────────
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    container_name: plex
+    # Intro/credit marker detection re-runs on every file Unmanic rewrites and
+    # spikes all cores. Same treatment as unmanic: low CPU weight (1024 =
+    # default) so analysis runs full-tilt when idle but yields ~4:1 to game
+    # servers and everything else under contention. Streams are unaffected:
+    # clients mostly direct-play and transcodes ride the iGPU, which shares
+    # don't touch. No cpuset — bursts may use all cores when nothing objects.
+    cpu_shares: 256
+    # host, not bridge — and this is load-bearing, not a preference. From inside a
+    # bridge Plex enumerates only its container IPs (172.19.0.2, 172.20.0.9) and
+    # publishes THOSE to plex.tv as its local=True connections. They are
+    # unroutable from the LAN, so every LAN client failed both local candidates,
+    # fell back to the plex.example.com connection, and arrived via Caddy — i.e.
+    # from 172.20.0.3, which is not in LanNetworksBandwidth. Result: your own
+    # MacBook on your own WiFi was billed as a WAN stream and had its client-side
+    # *Internet* bitrate cap applied (~10.5 Mbps against an 18.4 Mbps source),
+    # which forces a re-encode a remux would otherwise have satisfied for free.
+    # On host, eno1 is visible, so plex.tv gets 192-168-0-10.<uuid>.plex.direct
+    # as local=True and LAN clients connect direct. GDM discovery starts working
+    # again too (broadcast never crossed the bridge NAT).
+    # No `ports:` — host mode publishes nothing. The corollary is that :32400 is
+    # now a real host listener, so UFW applies to it (exactly like AdGuard's :53);
+    # the rules live in scripts/ufw-rules.sh and are NOT optional.
+    network_mode: host
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ:-Europe/Vienna}
+      - VERSION=docker
+    volumes:
+      - /home/jonathan/data/plex:/config
+      - /mnt/storage/media-stack/media:/data/media
+    restart: unless-stopped
+    healthcheck:
+      test: curl -f http://localhost:32400/identity || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      # Public (friends/family) — CrowdSec-protected, no IP gate.
+      caddy: plex.example.com
+      caddy.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      # HSTS: the :80 forward stays (it feeds CrowdSec's http-probing scenario),
+      # so returning browsers must be told never to use it. Caddy does NOT send
+      # this by default. Since 2026-07-27 Caddy is Plex's only remote path.
+      # Quoted: CDP splits label values on whitespace, and a 3-arg `header`
+      # directive is Caddy's search-and-replace form, not a set.
+      caddy.header.Strict-Transport-Security: '"max-age=31536000; includeSubDomains"'
+      # JSON access log to stderr — CrowdSec tails the caddy container and
+      # feeds these to the crowdsecurity/caddy scenarios (detection side of
+      # the bouncer below).
+      caddy.log: ""
+      # A LAN browser that types plex.example.com otherwise gets Plex Web served from
+      # THIS origin, and Plex Web uses the origin it was served from without any
+      # candidate testing — so it reports location=wan, switches to its Internet
+      # quality profile and sends directPlay=0 with a bitrate cap, which forces a
+      # re-encode a remux would have satisfied for free. Bounce those navigations
+      # to the connection Plex advertises as local=True instead.
+      #
+      # Scoped to Sec-Fetch-Mode: navigate deliberately. Plex's own clients probe
+      # /identity on this hostname during connection testing; if they got the 302
+      # they would follow it, conclude the *remote* candidate is healthy, and pick
+      # it while still tagging themselves wan. Only top-level browser navigations
+      # may be redirected.
+      #
+      # Host part is the server certificate's CN — read it back with
+      #   openssl s_client -connect 192.168.0.10:32400 </dev/null 2>/dev/null \
+      #     | openssl x509 -noout -subject
+      # It is stable for the life of the cert and only changes if Plex rotates it.
+      caddy.@lanweb.remote_ip: "192.168.0.0/24"
+      caddy.@lanweb.header: "Sec-Fetch-Mode navigate"
+      caddy.route.0_crowdsec: ""
+      caddy.route.1_redir: "@lanweb https://192-168-0-10.0123456789abcdef0123456789abcdef.plex.direct:32400{uri} 302"
+      # Plex is host-network, so there is no container name for CDP to resolve and
+      # {{upstreams}} would render empty — same situation as Home Assistant, so the
+      # same answer: the docker bridge gateway, which IS the host. Needs the
+      # matching 'from $DOCKER to port 32400' rule in scripts/ufw-rules.sh, since
+      # this now arrives as INPUT to the host rather than as a published port.
+      caddy.route.2_reverse_proxy: "172.20.0.1:32400"
+
+  cloudflare-ddns-plex:
+    container_name: cloudflare-ddns-plex
+    image: favonia/cloudflare-ddns:latest
+    restart: unless-stopped
+    # Hardening recommended by the image: non-root, read-only FS, no caps.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    cap_drop:
+      - all
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Uses the scoped CLOUDFLARE_API_TOKEN (needs Zone:Read + DNS:Edit).
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - DOMAINS=plex.example.com
+      - PROXIED=false
+      - IP6_PROVIDER=none
+
+# No networks block: plex is host-network and cloudflare-ddns-plex only needs
+# egress, so it sits on the compose project's default bridge. plex_net and this
+# stack's proxy_network membership both went away with the host-mode switch
+# (2026-07-29) — Caddy reaches Plex at 172.20.0.1:32400 instead.

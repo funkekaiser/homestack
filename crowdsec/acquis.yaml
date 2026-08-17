@@ -1,0 +1,17 @@
+# System authentication logs
+filenames:
+  - /var/log/auth.log
+  - /var/log/syslog
+labels:
+  type: syslog
+
+---
+# Caddy JSON access logs (per-site `log` labels → stderr) — parsed by the
+# crowdsecurity/caddy collection so HTTP scenarios can produce ban decisions.
+# NOTE: container_name is exact-match only; a "*" glob matches nothing
+# (that bug meant zero container lines were ever read).
+source: docker
+container_name:
+  - caddy
+labels:
+  type: caddy

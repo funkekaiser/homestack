@@ -1,0 +1,90 @@
+services:
+  borgmatic:
+    image: ghcr.io/borgmatic-collective/borgmatic:latest
+    container_name: borgmatic
+    # Stable hostname: borg prefixes archive names with the container hostname,
+    # which otherwise changes on every recreate. A drifting prefix means prune
+    # only ever matches the current container's archives and silently keeps all
+    # the rest forever. Pinning it keeps retention (keep_daily/weekly/monthly)
+    # working across recreates.
+    hostname: serverino
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-Europe/Vienna}
+      # Passphrase encrypts the borg repos client-side. Lives in .env.
+      # Store this passphrase OFFSITE too — without it the backups are unrecoverable.
+      - BORG_PASSPHRASE=${BORG_PASSPHRASE}
+      # Optional dead-man's-switch ping (healthchecks.io / Uptime Kuma push URL)
+      - HEALTHCHECKS_PINGURL=${BORGMATIC_PINGURL:-}
+    volumes:
+      # ── Sources to back up (READ-ONLY so borg can never alter your data) ──
+      # The irreplaceable stuff: container configs/state + authored data.
+      # Deliberately NOT backing up media, blockchains, or TimeMachine here.
+      #
+      # The WHOLE home dir, not just ~/data (changed 2026-07-27). Backing up an
+      # enumerated list of paths means anything living outside that list is
+      # silently unprotected, and that is exactly what bit us: ~/homelab (the
+      # repo — whose own backup is git, which was 97 commits unpushed),
+      # adguard/config/AdGuardHome.yaml, backup-files/ and ~/.ssh were all
+      # outside the one backed-up path. Covering ~ makes the default "protected"
+      # and the exceptions explicit in exclude_patterns. Cost is small: ~/data
+      # is 120 G of the 126 G total, and the caches are excluded.
+      #
+      # MOUNTED AT /mnt/source, NOT /mnt/source/home, on purpose: ~/data then
+      # keeps landing at the exact path it has always had (/mnt/source/data/…),
+      # so the 120 G of existing archives stay path-identical. A new prefix
+      # would not corrupt anything — borg dedups on content, not paths — but it
+      # would invalidate the files cache (one slow re-read of every file) and
+      # make `borg diff` across the boundary read as "everything deleted, then
+      # everything added". Keeping the path avoids both. Do not "tidy" this into
+      # a nested subdirectory.
+      - /home/jonathan:/mnt/source:ro
+
+      # ── Local on-site repo: the bare hdd2 branch (fast-ish restore tier) ──
+      # Moved off ssd2 on 2026-08-10: the repo reached 245 GB on a 234 GB disk and
+      # `borg create` started failing with exit 14 ("Insufficient free space").
+      # ~/data is 159 G, 83 G of which is Plex — and 73 G of THAT is regenerable
+      # .bif/.jpg preview thumbnails that churn on every library scan and so dedup
+      # badly. Keeping them was a deliberate call, which means the repo needed a
+      # bigger home rather than a smaller source.
+      #
+      # /mnt/hdd2 is the BARE BRANCH, not the pool path (/mnt/storage) — exactly
+      # the same trick samba/smb.conf uses for [TimeMachine], and for the same
+      # reason. mergerfs only scatters files created THROUGH the pool; writing to
+      # the branch directly keeps every chunk of the repo on one disk, so a single
+      # drive death costs the on-site copy and nothing else. Written through the
+      # pool it would be scattered over 4 aging drives and ANY of them dying would
+      # take the whole repo. See scripts/consolidate-timemachine.sh for the writeup
+      # of the same failure mode, discovered the hard way with the sparsebundle.
+      #
+      # The other half is in host-config/etc-fstab: the hdd2 branch is now =NC, so
+      # mergerfs never creates new media on the disk and cannot squeeze the repo
+      # out. hdd2 is the healthiest drive here (ST16000NT001, 7200rpm CMR, 24k
+      # hours, Scrutiny green) — but it is a single disk with no redundancy, and it
+      # shares that disk with Time Machine. Hetzner remains the real safety net.
+      #
+      # NOTE: moving the repo needed NO borg relocation dance, and the reason is
+      # this line's right-hand side. Borg's "repository moved" check keys on the
+      # path *borg* sees, which is the container-internal /mnt/borg-repository —
+      # unchanged. The host-side directory moving from ssd2 to hdd2 is invisible
+      # to it, so BORG_RELOCATED_REPO_ACCESS_IS_OK was never required (verified
+      # 2026-08-10). Keep the container-side path stable on any future move and
+      # the same holds; change it and you WILL need to acknowledge the relocation.
+      - /mnt/hdd2/borg-repo:/mnt/borg-repository
+
+      # ── Borgmatic config + crontab.txt ──
+      - /home/jonathan/homelab/borgmatic/config:/etc/borgmatic.d
+
+      # ── Borg state (cache = dedup checksums, config = repo keys/known repos) ──
+      - /home/jonathan/data/borgmatic/borg-config:/root/.config/borg
+      - /home/jonathan/data/borgmatic/borg-cache:/root/.cache/borg
+      - /home/jonathan/data/borgmatic/borg-state:/root/.local/state/borgmatic
+
+      # ── SSH key + known_hosts for the Storage Box (mounted read-only) ──
+      - /home/jonathan/data/borgmatic/ssh:/root/.ssh:ro
+    networks:
+      - proxy_network
+
+networks:
+  proxy_network:
+    external: true

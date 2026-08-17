@@ -1,0 +1,4 @@
+# ~/homelab/borgmatic/config/crontab.txt
+# Runs the full borgmatic flow (create -> prune local -> check) nightly at 03:30.
+# Adjust the time to a low-activity window during low disk I/O.
+30 3 * * *   PATH=$PATH:/usr/bin:/usr/local/bin   /usr/local/bin/borgmatic --verbosity -1 --syslog-verbosity 1

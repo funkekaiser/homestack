@@ -1,0 +1,19 @@
+services:
+    snowflake-proxy:
+        network_mode: host
+        image: containers.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake:latest
+        container_name: snowflake-proxy
+        restart: unless-stopped
+        # For a full list of Snowflake Proxy CLI parameters see
+        # https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/-/tree/main/proxy?ref_type=heads#running-a-standalone-snowflake-proxy
+        #command: [ "-ephemeral-ports-range", "30000:60000" ]
+        command: [ 
+          "-metrics", 
+          "-metrics-port", "9998" ,
+          "-metrics-address", "0.0.0.0",
+        ]
+        # deploy:
+        #   resources:
+        #     limits:
+        #       cpus: '0.50'     # Use max 50% of one CPU core
+        #       memory: 512M    # Use max 512MB RAM

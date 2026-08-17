@@ -1,0 +1,152 @@
+---
+- Media Servers:
+    - Plex:
+        icon: plex.png
+        href: https://plex.example.com
+        description: Media Server
+        server: my-docker
+        container: plex
+        widget:
+          type: plex
+          url: http://plex:32400
+          key: "{{HOMEPAGE_VAR_PLEX_API_KEY}}"
+
+- Infrastructure:
+    - Caddy:
+        icon: caddy.png
+        description: Reverse Proxy
+        server: my-docker
+        container: caddy
+
+    - Tailscale:
+        icon: tailscale.png
+        href: https://login.tailscale.com/admin
+        description: VPN Mesh Network (host systemd unit)
+        # tailscaled runs on the host, not in docker — there is no container
+        # status to read. `ping: <your tailnet IP>` gives a liveness badge.
+
+    - Samba:
+        icon: samba.png
+        description: File Sharing (SMB)
+        server: my-docker
+        container: samba
+
+    - Homepage:
+        icon: homepage.png
+        href: https://home.example.com
+        description: Dashboard
+        server: my-docker
+        container: homepage
+
+- Monitoring:
+    - AdGuard Home:
+        icon: adguard-home.png
+        href: https://adguard.example.com
+        description: DNS & Ad Blocking
+        server: my-docker
+        container: adguardhome
+        widget:
+          type: adguard
+          url: http://192.168.0.10:8888
+          username: "{{HOMEPAGE_VAR_ADGUARD_USER}}"
+          password: "{{HOMEPAGE_VAR_ADGUARD_PASS}}"
+
+    - AdGuard (Backup):
+        icon: adguard-home.png
+        href: https://adguard2.example.com
+        description: DNS Backup (Raspberry Pi)
+        widget:
+          type: adguard
+          url: http://192.168.0.11
+          username: "{{HOMEPAGE_VAR_ADGUARD_BACKUP_USER}}"
+          password: "{{HOMEPAGE_VAR_ADGUARD_BACKUP_PASS}}"
+
+    - AdGuard Sync:
+        icon: adguard-home.png
+        description: Config Sync (Primary → Backup)
+        server: my-docker
+        container: adguardhome-sync
+
+    - Uptime Kuma:
+        icon: uptime-kuma.png
+        href: https://uptime.example.com
+        description: Uptime Monitoring
+        server: my-docker
+        container: uptime-kuma
+        widget:
+          type: uptimekuma
+          url: http://uptime-kuma:3001
+          slug: "{{HOMEPAGE_VAR_UPTIMEKUMA_SLUG}}"
+
+    - CrowdSec:
+        icon: crowdsec.png
+        description: Intrusion Detection
+        server: my-docker
+        container: crowdsec
+
+    - Scrutiny:
+        icon: scrutiny.png
+        href: https://scrutiny.example.com
+        description: S.M.A.R.T. Disk Monitoring
+        server: my-docker
+        container: scrutiny
+        widget:
+          type: scrutiny
+          url: http://scrutiny:8080
+
+- Network:
+    - Home Assistant:
+        icon: home-assistant.png
+        href: https://homeassistant.example.com
+        description: Home Automation
+        server: my-docker
+        container: homeassistant
+        widget:
+          type: homeassistant
+          url: http://172.20.0.1:8123
+          key: "{{HOMEPAGE_VAR_HOMEASSISTANT_API_KEY}}"
+
+- Crypto:
+    - Bitcoin Node:
+        icon: bitcoin.png
+        description: Bitcoin Full Node (Pruned)
+        server: my-docker
+        container: bitcoin-node
+
+    - Snowflake:
+        icon: tor.png
+        description: Tor Snowflake Proxy
+        server: my-docker
+        container: snowflake-proxy
+
+- Utilities:
+    - DDNS (amp):
+        icon: cloudflare.png
+        description: Dynamic DNS (amp)
+        server: my-docker
+        container: cloudflare-ddns-amp
+
+    - DDNS (plex):
+        icon: cloudflare.png
+        description: Dynamic DNS (plex)
+        server: my-docker
+        container: cloudflare-ddns-plex
+
+    - DIUN:
+        icon: diun.png
+        description: Image Update Notifications
+        server: my-docker
+        container: diun
+
+- Gaming:
+    - Minecraft:
+        icon: minecraft.png
+        description: Minecraft Server
+        server: my-docker
+        container: minecraft
+
+    - V Rising:
+        icon: si-steam
+        description: V Rising Server
+        server: my-docker
+        container: vrising

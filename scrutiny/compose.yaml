@@ -1,0 +1,96 @@
+services:
+  scrutiny:
+    # Rolling RELEASE channel (2026-07-27, was `master-omnibus`). `master` is the
+    # trunk branch, not a release — and it wasn't even fresh trunk: that tag
+    # still resolves to a build from 2026-02-08, so this box was running OLDER
+    # code than release v0.9.2 (April) while looking like it tracked the newest.
+    # `latest-omnibus` follows releases and is identical to `v0-omnibus` today.
+    # "omnibus" = the all-in-one variant (web + collector + InfluxDB in one
+    # container); the split `-web`/`-collector` images are for multi-machine
+    # fleets. Do not move this to `nightly-`/`beta-`/`master-omnibus`.
+    image: ghcr.io/analogj/scrutiny:latest-omnibus
+    container_name: scrutiny
+    restart: unless-stopped
+    # De-privileged: dropped the blanket `privileged: true` (which granted ALL
+    # capabilities + the entire host device tree). Now only the specific disks
+    # and the two caps smartctl needs are granted. Docker's default cap set is
+    # kept (NOT cap_drop: all) so the root process retains DAC_OVERRIDE to read
+    # its mounted config; privileged still removed the dangerous extras.
+    cap_add:
+      - SYS_RAWIO        # SG_IO / ATA pass-through for smartctl
+      - SYS_ADMIN        # needed by some USB/NVMe bridges
+    group_add:
+      - disk
+    # Pinned by /dev/disk/by-id, NOT by bare letters: host letters reshuffle whenever
+    # disks move. The 2026-07-12 USB->SATA shuck shifted sdd/sde/sdg, /dev/sdg stopped
+    # existing, and Docker refused to start this container at all (Exited 128).
+    # by-id names are stable across reboots; the right-hand side is just the in-container
+    # name, so the host can renumber freely without breaking startup.
+    #
+    # KEEP THE RIGHT-HAND SIDE EQUAL TO THE CURRENT HOST LETTER. It is not arbitrary,
+    # despite looking like it: the collector resolves each disk's `device_serial_id`
+    # (the by-id label shown in the UI) by looking the in-container *name* up in
+    # /sys/block + /run/udev — and both of those are the HOST's, not the container's.
+    # So in-container `sdd` inherits whatever the HOST's `sdd` is. When these two
+    # disagree the UI mislabels drives (it did, 2026-07-13 -> 2026-07-26: three disks
+    # carried a neighbour's by-id string and ssd2 carried none, because no host sdh
+    # exists). Docker still maps the correct physical disk either way, so this is
+    # cosmetic — but it is the kind of cosmetic that sends you diagnosing the wrong
+    # drive. After any host letter reshuffle, re-align these and `scripts/smart-long-test.sh`.
+    devices:
+      - /dev/disk/by-id/ata-ST16000NT001-3LV101_SERIAL:/dev/sda               # 16TB IronWolf Pro  -> hdd2
+      - /dev/disk/by-id/ata-SAMSUNG_MZ7LN512HCHP-00000_SERIAL:/dev/sdb  # 512G Samsung  -> boot
+      - /dev/disk/by-id/ata-Micron_1100_MTFDDAK512TBN_SERIAL:/dev/sdc     # 512G Micron   -> ssd1
+      - /dev/disk/by-id/ata-SAMSUNG_MZ7LN256HAJQ-000L7_SERIAL:/dev/sdd  # 256G Samsung  -> ssd2 (ex-Windows, wiped 2026-07-13)
+      - /dev/disk/by-id/ata-ST1000LM024_HN-M101MBB_SERIAL:/dev/sde      # 1TB laptop (now SATA) -> hdd4
+      - /dev/disk/by-id/ata-WDC_WD10EARX-22N0YB0_SERIAL:/dev/sdf       # 1TB WD Green  -> hdd5
+      - /dev/disk/by-id/ata-ST4000DM004-2CV104_SERIAL:/dev/sdg                # 4TB BarraCuda (SMR) -> hdd1
+      # hdd3 (USB) decommissioned 2026-07-06 — physically removed, no longer monitored
+    healthcheck:
+      test: curl -f http://localhost:8080/api/health || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment:
+      - TZ=${TZ:-Europe/Vienna}
+      # Discord notification target — value kept out of the tracked yaml (see .env).
+      #
+      # MUST use the shoutrrr scheme `discord://<webhook_token>@<webhook_id>`.
+      # Do NOT paste the raw `https://discord.com/api/webhooks/<id>/<token>` URL:
+      # scrutiny then takes its *generic webhook* code path and POSTs its own JSON
+      # shape, which Discord rejects with 400 "Cannot send an empty message"
+      # (code 50006) — while scrutiny logs "Successfully sent notifications"
+      # regardless. That is a SILENT total loss of SMART alerting, and it is exactly
+      # what happened here: alerts were dead from ~2026-05-16 until 2026-07-26 and
+      # nothing in the logs said so. The webhook itself was live the whole time.
+      #
+      # Verify end-to-end after ANY change to this value — do not trust the log line:
+      #   docker exec scrutiny curl -s -X POST http://localhost:8080/api/health/notify
+      # then confirm the message actually arrived in Discord. The log says success
+      # either way; only the Discord channel is proof.
+      - SCRUTINY_NOTIFY_URLS=${SCRUTINY_NOTIFY_URLS:-}
+      # Collect every 6h instead of the default once-a-day (midnight). The mergerfs pool
+      # has NO redundancy — a drive that starts failing at 00:05 would otherwise go
+      # unreported for ~24h. Polling SMART is a cheap read; there's no reason to wait.
+      - COLLECTOR_CRON_SCHEDULE=0 */6 * * *
+    volumes:
+      - /home/jonathan/data/scrutiny:/opt/scrutiny/config
+      - ./scrutiny.yaml:/opt/scrutiny/config/scrutiny.yaml
+      - /run/udev:/run/udev:ro
+    networks:
+      - proxy_network
+    labels:
+      caddy: scrutiny.example.com
+      caddy.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      caddy.@external.not.remote_ip: "192.168.0.0/24 100.64.0.0/10 fd7a:115c:a1e0::/48 172.16.0.0/12 10.0.0.0/8 127.0.0.1/8 ::1"
+      caddy.log: ""
+      caddy.route.0_crowdsec: ""
+      caddy.route.1_respond: '@external "Forbidden" 403'
+      # Static name, not {{upstreams}} — request-time DNS avoids CDP's boot-race
+      # (empty upstream baked into config) and reload churn. See pelican/compose.yaml.
+      caddy.route.2_reverse_proxy: "scrutiny:8080"
+
+networks:
+  proxy_network:
+    external: true

@@ -1,0 +1,25 @@
+---
+title: example.com Homelab
+
+theme: dark
+color: slate
+
+headerStyle: clean
+
+layout:
+  Monitoring:
+    style: column
+  Media Management:
+    style: column
+  Media Servers:
+    style: column
+  Downloaders:
+    style: column
+  Infrastructure:
+    style: column
+  Crypto:
+    style: column
+  Utilities:
+    style: column
+  Gaming:
+    style: column

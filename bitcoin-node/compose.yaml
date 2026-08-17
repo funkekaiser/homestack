@@ -1,0 +1,48 @@
+services:
+  bitcoin-node:
+    container_name: bitcoin-node
+    # Official Bitcoin Core image, rolling MAJOR (2026-07-27, migrated off
+    # lncm/bitcoind:v28.0 — that publisher's last push was 2025-01-19 and 28.x
+    # went End of Life with the 31.0 release, so it would never see another
+    # security fix). `31` tracks 31.x patches automatically; a jump to 32 stays a
+    # human decision, which is the right shape for consensus software. Do NOT
+    # move this to `latest` (auto-major-jumps) or `master` (trunk).
+    image: bitcoin/bitcoin:31
+    # NOT `user:` — this image's entrypoint must start as root: it usermods the
+    # `bitcoin` account to $UID/$GID, chowns the datadir, then drops privileges
+    # with gosu. Setting `user:` breaks all three and the node won't start.
+    environment:
+      - UID=${PUID}
+      - GID=${PGID}
+    volumes:
+      # Datadir path changed with the image: lncm used /data/.bitcoin, the
+      # official image hardcodes BITCOIN_DATA=/home/bitcoin/.bitcoin and appends
+      # -datadir= itself. Host path is unchanged, so the 60 GB pruned chain is
+      # reused as-is — no re-sync. (Not in borg: /mnt is outside the backup.)
+      - /mnt/ssd1/crypto/bitcoin-node:/home/bitcoin/.bitcoin
+    # unless-stopped, not on-failure: a host reboot stops containers with exit 0,
+    # which on-failure treats as "don't restart" — the node stayed down after reboots.
+    restart: unless-stopped
+    # Bitcoind flushes chainstate on shutdown; killing it mid-flush risks a
+    # reindex, which a PRUNED node cannot do without re-downloading the chain.
+    stop_grace_period: 15m30s
+    ports:
+      - "8333:8333"                 # p2p — must stay public
+      - "127.0.0.1:8332:8332"       # RPC — host-local only (reach off-host via Tailscale)
+      - "127.0.0.1:28332:28332"     # ZMQ rawblock — host-local only
+      - "127.0.0.1:28333:28333"     # ZMQ rawtx — host-local only
+    command:
+      - -server=1
+      - -txindex=0            # Required for pruning
+      - -prune=50000          # Keep ~50GB of blocks
+      - -dbcache=2000         # 2GB cache (reasonable for pruned node)
+      - -printtoconsole
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=172.16.0.0/12  # Allow Docker network
+      - -rpcallowip=127.0.0.1      # Allow localhost
+      # This image has no BITCOIN_RPCUSER/BITCOIN_RPCPASSWORD handling (lncm's
+      # did), so the credentials come in as bitcoind flags instead. Kept rather
+      # than dropped to cookie-only auth: the RPC port is deliberately reachable
+      # off-host via Tailscale, and a cookie can't be used from there.
+      - -rpcuser=${BITCOIN_RPCUSER:-bitcoinrpc}
+      - -rpcpassword=${RPC_PASSWORD}

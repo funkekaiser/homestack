@@ -1,0 +1,24 @@
+services:
+  samba:
+    image: ghcr.io/servercontainers/samba:latest
+    container_name: samba
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ACCOUNT_serverino: ${SAMBA_PASS}
+      UID_serverino: "${PUID}"
+      GROUPS_serverino: "${PGID}"
+      TZ: Europe/Vienna
+    volumes:
+      - ./smb.conf:/etc/samba/smb.conf:ro
+      - /mnt/hdd1:/mnt/hdd1
+      - /mnt/hdd2:/mnt/hdd2
+      - /mnt/storage:/mnt/storage
+    # networks:
+    #   lan_macvlan:
+    #     ipv4_address: 192.168.0.11
+
+# networks:
+#   lan_macvlan:
+#     external: true
+#     name: lan_macvlan

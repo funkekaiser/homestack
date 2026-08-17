@@ -1,0 +1,32 @@
+services:
+  diun:
+    image: crazymax/diun:latest
+    container_name: diun
+    command: serve
+    volumes:
+      - "/home/jonathan/data/diun:/data"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"  # read-only
+    environment:
+      - TZ=${TZ:-Europe/Vienna}
+      - LOG_LEVEL=info
+      - LOG_JSON=false
+
+      # Watch settings
+      - DIUN_WATCH_WORKERS=20
+      - DIUN_WATCH_SCHEDULE=0 */6 * * *
+      - DIUN_WATCH_JITTER=30s
+
+      # Docker provider
+      - DIUN_PROVIDERS_DOCKER=true
+      - DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=true
+
+      # Discord notification
+      - DIUN_NOTIF_DISCORD_WEBHOOKURL=${DISCORD_WEBHOOKURL}
+      # comma-separated, no spaces
+      - DIUN_NOTIF_DISCORD_RENDERFIELDS=true
+      - DIUN_NOTIF_DISCORD_TIMEOUT=10s
+    labels:
+      - "diun.enable=false"   # don't watch Diun itself
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

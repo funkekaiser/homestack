@@ -1,0 +1,52 @@
+services:
+  adguard:
+    image: adguard/adguardhome:latest
+    container_name: adguardhome
+    restart: unless-stopped
+    network_mode: host
+    healthcheck:
+      test: wget --spider -q http://localhost:8888 || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - /home/jonathan/data/adguard/work:/opt/adguardhome/work
+      # conf lives in ~/data, NOT in the repo (moved 2026-07-27). AdGuard
+      # rewrites AdGuardHome.yaml itself — it is runtime state, not authored
+      # config — and it was gitignored while bind-mounted out of the repo, so
+      # the *.example.com wildcard rewrite the whole vhost scheme depends on was in
+      # neither git nor borg. ~/data is the backed-up path.
+      - /home/jonathan/data/adguard/conf:/opt/adguardhome/conf
+    labels:
+      caddy: adguard.example.com
+      caddy.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      caddy.@external.not.remote_ip: "192.168.0.0/24 100.64.0.0/10 fd7a:115c:a1e0::/48 172.16.0.0/12 10.0.0.0/8 127.0.0.1/8 ::1"
+      caddy.log: ""
+      caddy.route.0_crowdsec: ""
+      caddy.route.1_respond: '@external "Forbidden" 403'
+      caddy.route.2_reverse_proxy: "192.168.0.10:8888"
+
+  adguardhome-sync:
+    image: ghcr.io/bakito/adguardhome-sync:latest
+    container_name: adguardhome-sync
+    restart: unless-stopped
+    environment:
+      # Primary (serverino) → replica (Raspberry Pi). Credentials come from .env,
+      # never committed. See https://github.com/bakito/adguardhome-sync for the vars.
+      - ORIGIN_URL=http://192.168.0.10:8888
+      - ORIGIN_USERNAME=${ADGUARD_USER}
+      - ORIGIN_PASSWORD=${ADGUARD_PASS}
+      - REPLICA1_URL=http://192.168.0.11
+      - REPLICA1_USERNAME=${ADGUARD_BACKUP_USER}
+      - REPLICA1_PASSWORD=${ADGUARD_BACKUP_PASS}
+      - CRON=*/10 * * * *
+      - RUN_ON_START=true
+    networks:
+      proxy_network: {}
+    depends_on:
+      - adguard
+
+networks:
+  proxy_network:
+    external: true

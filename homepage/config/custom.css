@@ -1,0 +1,44 @@
+/* Inter as the UI font — self-hosted, served via the public/images mount.
+   The only customization; everything else is stock homepage. */
+
+@font-face {
+  font-family: "Inter";
+  src: url("/images/InterVariable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+html,
+body,
+button,
+input,
+.font-sans {
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif !important;
+}
+
+/* Header blocks share one top line — labeled disk blocks are taller than
+   the cpu/mem cluster, so stock self-center staggered the bars */
+#information-widgets .widget-container {
+  align-self: flex-start !important;
+}
+
+/* Pack the header widgets left — stock justify-between spreads the
+   individual disk blocks across the whole row */
+#widgets-wrap {
+  justify-content: flex-start !important;
+  column-gap: 1.5rem !important;
+}
+
+/* Resources labels (media pool, borg on-site, …): left-align under the
+   metric row instead of the stock centered-with-indent look */
+.widget-container div:has(> .information-widget-resource) + div {
+  text-align: left !important;
+  margin-left: 0 !important;
+}
+/* fallback for Safari < 15.4 (no :has support): the label is the only
+   direct .text-center child of a widget container */
+.widget-container > .text-center {
+  text-align: left !important;
+  margin-left: 0 !important;
+}

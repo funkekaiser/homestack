@@ -1,0 +1,164 @@
+services:
+
+  # ── Pelican Panel — the web dashboard (replaces AMP's ADS01 UI) ──────────────
+  # Friends log in here (own accounts + 2FA), edit server config files in the
+  # built-in file manager, and use the console. Server *creation* stays admin-only;
+  # see the allocation-pool note on wings below for how new servers get ports
+  # without anyone touching the firewall.
+  panel:
+    # The GitHub org renamed pelican-dev -> pelican (2026-08). Repo URLs redirect,
+    # but GHCR package paths do NOT follow a rename: ghcr.io/pelican-dev/* now
+    # returns "denied" on pull. Both images live under ghcr.io/pelican/ instead.
+    image: ghcr.io/pelican/panel:latest
+    container_name: pelican-panel
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Europe/Vienna}
+      APP_URL: "https://games.example.com"
+      APP_ENV: production
+      APP_DEBUG: "false"
+      # BEHIND_PROXY makes the image's *internal* caddy listen plain :80 with
+      # auto_https off — our Caddy (proxy_network) terminates TLS. No published
+      # ports: the panel is reachable only through the reverse proxy.
+      BEHIND_PROXY: "true"
+      TRUSTED_PROXIES: "172.20.0.0/16"
+      XDG_DATA_HOME: /pelican-data
+      # Mail is deliberately NOT set here: real env vars beat .env in Laravel,
+      # and the SMTP settings live in /pelican-data/.env (written by the admin
+      # Settings UI, iCloud SMTP, 2026-07-14). Setting MAIL_DRIVER here would
+      # silently override that back to log-only.
+    volumes:
+      # SQLite DB, .env (holds the generated APP_KEY), avatars — all under
+      # ~/data so borg covers the whole panel state.
+      - /home/jonathan/data/pelican/panel:/pelican-data
+      - /home/jonathan/data/pelican/panel/plugins:/var/www/html/plugins
+      - /home/jonathan/data/pelican/panel-logs:/var/www/html/storage/logs
+    networks:
+      - proxy_network
+    healthcheck:
+      test: curl -f http://localhost/up || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      # Public (friends connect from the internet) — CrowdSec-protected;
+      # auth is the panel's own login + 2FA.
+      caddy: games.example.com
+      caddy.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      # HSTS — see plex/compose.yaml. Friends log in here, so a downgraded
+      # session would leak panel credentials.
+      caddy.header.Strict-Transport-Security: '"max-age=31536000; includeSubDomains"'
+      caddy.log: ""
+      caddy.route.0_crowdsec: ""
+      # Static container name, not {{upstreams}}: resolves at request time via
+      # Docker DNS, so a CDP config regen during container boot can't bake in an
+      # empty upstream (bit us 2026-07-14: stuck reload left dual listeners →
+      # intermittent 502s). Also keeps the generated Caddyfile byte-identical
+      # across restarts, so CDP skips needless reloads.
+      caddy.route.1_reverse_proxy: "pelican-panel:80"
+
+  # ── Wings — the node daemon that runs game servers as Docker containers ─────
+  # Wings talks to the HOST docker daemon (docker.sock), so every path it hands
+  # to a game container must exist at the SAME path on the host. That's why the
+  # data/tmp mounts below are path-identical, and why the wings data root is
+  # configured (in config.yml) to live under ~/data — game saves land in borg
+  # automatically, per the bind-mounts-only convention in CLAUDE.md.
+  wings:
+    image: ghcr.io/pelican/wings:latest
+    container_name: pelican-wings
+    restart: unless-stopped
+    tty: true
+    environment:
+      TZ: ${TZ:-Europe/Vienna}
+      WINGS_USERNAME: pelican
+      # gid 988 = the host docker group (DOCKER_GROUP_ID in .env.common) —
+      # required for docker.sock; upstream's example uses the same ids.
+      WINGS_UID: 988
+      WINGS_GID: 988
+    ports:
+      # SFTP for bulk file transfer — LAN + tailnet only, NEVER 0.0.0.0
+      # (the old AMP SFTP sat open to Anywhere; friends edit files via the
+      # web UI instead). Game-server ports are NOT listed here: wings
+      # publishes them itself when it creates each game container.
+      - "192.168.0.10:2022:2022"   # LAN (eno1)
+      - "100.100.100.100:2022:2022"  # tailscale (serverino)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/containers/:/var/lib/docker/containers/
+      # config.yml + passwd (node token — a secret; ~/data is borg'd, not git'd).
+      # On the host, /etc/pelican is a SYMLINK to ~/data/pelican/etc — wings
+      # bind-mounts /etc/pelican/passwd into every game container via the HOST
+      # daemon, so the path must resolve on the host too. Restore on rebuild:
+      #   sudo ln -s /home/jonathan/data/pelican/etc /etc/pelican
+      - /etc/pelican:/etc/pelican
+      # game-server data — path-identical (see note above)
+      - /home/jonathan/data/pelican/wings:/home/jonathan/data/pelican/wings
+      # wings' own state: BACKUPS, archives, wings.db, states.json. The panel
+      # rewrites config.yml on every wings boot, so pointing backup_directory
+      # at ~/data via config does NOT stick — instead the default path is
+      # mounted, and on the host /var/lib/pelican is a SYMLINK into ~/data
+      # (same trick as /etc/pelican). Restore on rebuild:
+      #   sudo ln -s /home/jonathan/data/pelican/wings/lib /var/lib/pelican
+      - /var/lib/pelican:/var/lib/pelican
+      - /tmp/pelican:/tmp/pelican
+      - /home/jonathan/data/pelican/wings-logs:/var/log/pelican
+      # CA bundle so wings trusts the panel's Let's Encrypt cert
+      - /etc/ssl/certs:/etc/ssl/certs:ro
+    networks:
+      # On proxy_network so Caddy can reach :8080 (API + console websocket).
+      # Game containers do NOT join this network — wings creates its own
+      # isolated bridge (pelican_nw) for them via the docker API.
+      - proxy_network
+    # No healthcheck: wings' API answers nothing unauthenticated (401/404),
+    # and the distroless-ish image has no curl/wget worth relying on.
+    labels:
+      # Semi-public: the browser console/file-manager connects to wings directly
+      # (wss://wings.example.com), TLS terminated by our Caddy; wings itself
+      # speaks plain HTTP behind it (node setting "Behind Proxy" in the panel).
+      #
+      # Only the three paths a *browser* actually uses are public. Everything
+      # else under /api/* is the node-admin control plane of a daemon holding a
+      # read-write docker.sock, and is gated to internal IPs like any admin UI
+      # (2026-07-27; it used to answer the WAN and was already being probed).
+      # This is safe because panel->wings calls always arrive internal
+      # (192.168.0.1, hairpin) — as does the Kuma `Wings` monitor — and SFTP
+      # (:2022) is LAN/tailnet-only anyway, so off-LAN friends are on the web
+      # file manager, i.e. /download/* + /upload/*.
+      caddy: wings.example.com
+      caddy.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      caddy.header.Strict-Transport-Security: '"max-age=31536000; includeSubDomains"'
+      caddy.@external.not.remote_ip: "192.168.0.0/24 100.64.0.0/10 fd7a:115c:a1e0::/48 172.16.0.0/12 10.0.0.0/8 127.0.0.1/8 ::1"
+      caddy.log: ""
+      caddy.route.0_crowdsec: ""
+      # Browser paths first: proxied regardless of source IP. The label value is
+      # split on whitespace, so this is a three-argument `path` matcher.
+      caddy.route.1_@browser.path: "/api/servers/*/ws /download/* /upload/*"
+      caddy.route.2_reverse_proxy: "@browser pelican-wings:8080"
+      # Everything else: internal only.
+      caddy.route.3_respond: '@external "Forbidden" 403'
+      caddy.route.4_reverse_proxy: "pelican-wings:8080"
+
+  # ── Dynamic DNS for the game domains (same pattern as cloudflare-ddns-plex
+  # in plex/compose.yaml — each public-facing stack owns its own ddns).
+  ddns:
+    container_name: cloudflare-ddns-games
+    image: favonia/cloudflare-ddns:latest
+    restart: unless-stopped
+    # Hardening recommended by the image: non-root, read-only FS, no caps.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    cap_drop:
+      - all
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Uses the scoped CLOUDFLARE_API_TOKEN (needs Zone:Read + DNS:Edit).
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - DOMAINS=games.example.com,wings.example.com
+      - PROXIED=false
+      - IP6_PROVIDER=none
+
+networks:
+  proxy_network:
+    external: true

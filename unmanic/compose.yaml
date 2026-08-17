@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Unmanic — library optimizer to reclaim disk. Keeps the library in HEVC by
+# re-encoding non-HEVC (mainly H.264) with QuickSync hevc_qsv on the iGPU —
+# fast and light on the CPU; Plex shares the iGPU but most clients direct-play,
+# so contention is rare. The HEVC plugin skips files already HEVC by default,
+# so the 4K UHD tier is protected out of the box. NOT on the VPN/arr network —
+# it only touches local files. Drive the library + plugin stack + worker count
+# from the UI (8888).
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  unmanic:
+    image: josh5/unmanic:latest
+    container_name: unmanic
+    restart: unless-stopped
+    # Be a good neighbour on the 6-core i5-8400: encoding runs on the iGPU (QSV),
+    # but ffmpeg's filters/audio/muxing still burn CPU — confine to cores 0-3
+    # (leave 4-5 fully free for Plex/system) and run at low CPU weight so it
+    # yields under contention. cpu_shares is the container-native "nice" (1024 =
+    # default weight; 256 ≈ ~1/4 share when the box is busy). Sizing: the iGPU
+    # RENDER engine is a fixed ~75-80 fps pie for 1080p hevc_qsv preset-slow —
+    # any count ≥2 saturates it (paired A/B 2026-07-18: 2w=80, 3w=62-74 on
+    # identical files; 1w caps ~60, single-stream pipeline limit). More workers
+    # just split the pie; reducing the count drains gracefully (finishes the
+    # running task first). Caveat: cpu_shares does NOT prioritize the GPU, which
+    # is exactly what a Plex transcode needs — hence the schedule below.
+    #
+    # Worker schedule (worker group "Peons", set 2026-08-05, lives in the DB not
+    # here): 1 worker in the 04:00-10:00 dead window only, off the rest of the
+    # day. Boundaries are `count` events (1 at 04:01, 0 at 10:00), not
+    # pause/resume, because `count` is persisted by the foreman
+    # (`worker_group.save()`) while the paused flag is thread state — a container
+    # restart at 20:00 would otherwise bring workers back *unpaused* and encode
+    # straight through the evening peak. The 04:00 `resume` clears the belt-and-
+    # braces 18:00 `pause` (which only ever catches a task still running from the
+    # morning window; without a resume it would stay SIGSTOPped forever).
+    # Seeing "0 workers" in the UI during the day is the expected state.
+    cpuset: "0-3"
+    cpu_shares: 256
+    # QuickSync (Intel UHD 630) for optional hevc_qsv hardware encoding. Pass the
+    # render node; group_add lets the PUID user open it for VAAPI/QSV.
+    # renderD128 = group "render" (GID 993); card1 = "video" (GID 44).
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "993"   # render (renderD128) — needed for QSV
+      - "44"    # video  (card1)
+    networks:
+      - proxy_network
+    environment:
+      - TZ=${TZ:-Europe/Vienna}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+    volumes:
+      - /home/jonathan/data/unmanic:/config
+      # Library (read/write — Unmanic replaces files in place). Add a library in
+      # the GUI pointing at /library/movies and /library/tv.
+      - /mnt/storage/media-stack/media:/library
+      # Transcode scratch on the SSD, not the HDD array.
+      - /mnt/ssd1/tmp/unmanic-cache:/tmp/unmanic
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8888' 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      # Internal-only admin UI: 403 to the public internet (same gate as the
+      # arr stack). CIDRs mirror crowdsec jof-trusted-networks.
+      caddy: unmanic.example.com
+      caddy.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      caddy.@external.not.remote_ip: "192.168.0.0/24 100.64.0.0/10 fd7a:115c:a1e0::/48 172.16.0.0/12 10.0.0.0/8 127.0.0.1/8 ::1"
+      caddy.log: ""
+      caddy.route.0_crowdsec: ""
+      caddy.route.1_respond: '@external "Forbidden" 403'
+      # Static name, not {{upstreams}} — request-time DNS avoids CDP's boot-race
+      # (empty upstream baked into config) and reload churn. See pelican/compose.yaml.
+      caddy.route.2_reverse_proxy: "unmanic:8888"
+
+networks:
+  proxy_network:
+    external: true

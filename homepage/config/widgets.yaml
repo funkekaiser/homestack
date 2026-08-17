@@ -1,0 +1,32 @@
+---
+- resources:
+    cpu: true
+    cputemp: true
+    tempmin: 30
+    tempmax: 100
+    memory: true
+    uptime: true
+
+- resources:
+    label: media pool
+    disk:
+      - /mnt/storage
+
+- resources:
+    label: system + appdata
+    disk:
+      - /
+
+- resources:
+    label: scratch + chains
+    disk:
+      - /mnt/ssd1
+
+# hdd2, not ssd2, since 2026-08-10 — this is now the disk that carries BOTH backups
+# (borg on-site repo + the Mac's Time Machine sparsebundle) and no media, because its
+# mergerfs branch is =NC. It reads high (94%) by design: 12 T of already-written media
+# sits there from before the NC flip. What matters is that the free space stops falling.
+- resources:
+    label: backups (borg + TM)
+    disk:
+      - /mnt/hdd2

@@ -1,0 +1,45 @@
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: "ghcr.io/home-assistant/home-assistant:stable"
+    volumes:
+      - /home/jonathan/data/homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    restart: unless-stopped
+    # HA unloads integrations + commits the recorder DB on shutdown — routinely
+    # slower than docker's default 10s, after which it gets SIGKILLed (happened
+    # at the 2026-07-17 reboot). Ceiling only: normal stops still return early.
+    stop_grace_period: 2m
+    healthcheck:
+      # /manifest.json needs no auth token — probing /api/ made HA log every
+      # healthcheck as a failed login attempt from ::1
+      test: curl -s -f -o /dev/null http://localhost:8123/manifest.json || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    network_mode: host
+    environment:
+      TZ: ${TZ:-Europe/Vienna}
+    labels:
+      caddy: homeassistant.example.com
+      caddy.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      caddy.@external.not.remote_ip: "192.168.0.0/24 100.64.0.0/10 fd7a:115c:a1e0::/48 172.16.0.0/12 10.0.0.0/8 127.0.0.1/8 ::1"
+      caddy.log: ""
+      caddy.route.0_crowdsec: ""
+      caddy.route.1_respond: '@external "Forbidden" 403'
+      caddy.route.2_reverse_proxy: "172.20.0.1:8123"
+
+  # mosquitto:
+  #   image: eclipse-mosquitto
+  #   container_name: mosquitto
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - homeassistant
+  #   ports:
+  #     - "1883:1883"
+  #   volumes:
+  #     - /home/jonathan/data/mosquitto/config:/mosquitto/config
+  #     - /home/jonathan/data/mosquitto/data:/mosquitto/data
+  #     - /home/jonathan/data/mosquitto/log:/mosquitto/log

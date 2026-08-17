@@ -1,0 +1,27 @@
+# ── Secrets ──────────────────────────────────────────────────────
+# Real env files are never committed...
+.env
+.env.*
+secrets/
+**/secrets.yml
+**/secrets.yaml
+# ...but these committed shared constants / templates are safe to keep.
+!.env.common
+!.env.example
+
+# ── App data / state (lives in ~/data, not the repo) ─────────────
+data/
+*/data/
+logs/
+tmp/
+
+# ── Claude Code (local settings, worktrees) ──────────────────────
+.claude/
+
+# ── Docker / build junk ──────────────────────────────────────────
+**/node_modules/
+dist/
+
+# ── Local-only artifacts ─────────────────────────────────────────
+# Router config backups — contain WiFi PSKs / admin creds, keep offsite.
+backup-files/

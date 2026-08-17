@@ -1,0 +1,8 @@
+cat > ~/homelab/borgmatic/.gitignore <<'EOF'
+# never commit anything that could carry secrets
+*.key
+*_key
+id_*
+known_hosts
+.env*
+EOF

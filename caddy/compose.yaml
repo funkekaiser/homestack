@@ -1,0 +1,86 @@
+services:
+  caddy:
+    build: 
+      context: .
+      # Pull ensures it checks for new base images every time you build
+      pull: true
+    container_name: caddy
+    restart: unless-stopped
+    healthcheck:
+      test: caddy version || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    #cap_add:
+    #  - NET_ADMIN
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # Required for HTTP/3
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - CADDY_INGRESS_NETWORKS=proxy_network
+      - DOMAIN=example.com
+      - CROWDSEC_BOUNCER_KEY=${CROWDSEC_BOUNCER_KEY}
+      # Defense-in-depth against reload churn (the bouncer module warns <2s
+      # is unsafe with docker_proxy). NOT sufficient alone — the actual wedge
+      # fix is disable_streaming below; churn-tested 2026-07-14, see TODO.md.
+      - CADDY_DOCKER_EVENT_THROTTLE_INTERVAL=2s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # read-only: caddy-docker-proxy only reads labels/events
+      - /home/jonathan/data/caddy/data:/data
+      - /home/jonathan/data/caddy/config:/config
+    networks:
+      - proxy_network
+    labels:
+      # ── Global options ──────────────────────────────────────────────
+      # CrowdSec bouncer: enforce ban decisions (SSH brute-force, community
+      # blocklist, CAPI) at the proxy. LAPI runs on the host (network_mode:
+      # host) reachable from proxy_network via the docker gateway 172.20.0.1.
+      caddy.crowdsec.api_url: "http://172.20.0.1:8085"
+      caddy.crowdsec.api_key: "{env.CROWDSEC_BOUNCER_KEY}"
+      # Live mode (per-request LAPI query, ~ms on the docker bridge) instead of
+      # streaming: the streaming bouncer hangs caddy's graceful reload under
+      # CDP config churn (admin API dies, old+new listeners round-robin →
+      # intermittent 502s). Reproduced twice on 2026-07-14 (CDP v2.12.1 and
+      # v2.13.1); upstream hslatman/caddy-crowdsec-bouncer#61. Do not
+      # reintroduce ticker_interval/streaming without re-running the churn
+      # test in TODO.md.
+      caddy.crowdsec.disable_streaming: ""
+
+      # Internal-only sites use a per-site @external matcher (LAN/tailnet/
+      # docker/loopback) + respond 403. CIDRs mirror
+      # crowdsec/parsers/.../jof-trusted-networks.yaml.
+
+      # Public-facing sites also write JSON access logs to stderr (`log`
+      # directive) — CrowdSec tails this container (crowdsec/acquis.yaml,
+      # docker source) and runs the crowdsecurity/caddy scenarios on them.
+      # Without the logs the bouncer above enforces an always-empty list.
+
+      # ── AdGuard (Raspberry Pi replica) — internal-only (403 from WAN) ──
+      caddy_1: adguard-pi.example.com
+      caddy_1.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+      caddy_1.log: ""
+      caddy_1.@external.not.remote_ip: "192.168.0.0/24 100.64.0.0/10 fd7a:115c:a1e0::/48 172.16.0.0/12 10.0.0.0/8 127.0.0.1/8 ::1"
+      caddy_1.route.0_crowdsec: ""
+      caddy_1.route.1_respond: '@external "Forbidden" 403'
+      caddy_1.route.2_reverse_proxy: "192.168.0.11:80"
+    
+# this is how you add it to the containers:
+# networks:
+#       - proxy_network
+#     labels:
+#       caddy: CONTAINERNAME.example.com
+#       caddy.reverse_proxy: "{{upstreams CONTAINER UI IP}}"
+#       caddy.tls.dns: "cloudflare {env.CLOUDFLARE_API_TOKEN}"
+
+# networks:
+#   proxy_network:
+#     external: true
+
+networks:
+  proxy_network:
+    external: true
+
+    

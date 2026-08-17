@@ -1,0 +1,127 @@
+{
+    "_comment": "Hand-written for serverino (not exported from the panel). Runs the Bannerlord Coop mod's own dedicated server (BannerlordCoopServer.exe) under Wine. Verified end-to-end on 2026-08-15: boots headless in ~52s, listens on UDP 4200, autosaves, and exits 0 on the 'stop' console command. The launcher's --no-tui flag (from its own --help, undocumented in release-info.txt) is what keeps the panel console line-oriented and lets the @DS@ done-marker reach stdout; an earlier revision piped through 'cat', which only worked because --no-tui self-enables when stdout is redirected. NOTE the install dir must be WRITABLE: AutoSyncBuilder writes engine/Modules/Coop/bin/Win64_Shipping_Server/AutoSyncExport/ at every boot. The mod is NOT redistributable, so this egg never ships game files: it either pulls the Steam Workshop item with the operator's own credentials, or expects a manual upload. See pelican/eggs/README.md.",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-15T01:10:00+02:00",
+    "name": "Bannerlord Coop (dedicated server)",
+    "author": "me@example.com",
+    "uuid": "27f0ecd8-3c76-4f3b-926b-a12185655c31",
+    "description": "Mount & Blade II: Bannerlord co-op campaign server — the dedicated server shipped inside the Bannerlord Coop workshop item (3770450698), run under Wine. This is the shared-campaign co-op mod, NOT TaleWorlds' native PvP DedicatedCustomServer. Self-contained (bundled .NET + its own engine/), so Bannerlord does not need to be installed. LISTENS ON UDP 4200 ONLY — the port is not configurable, so the server's allocation must be 4200.",
+    "tags": [
+        "wine",
+        "steamcmd"
+    ],
+    "features": null,
+    "docker_images": {
+        "ghcr.io/parkervcp/yolks:wine_latest": "ghcr.io/parkervcp/yolks:wine_latest"
+    },
+    "file_denylist": [],
+    "startup": "Xvfb :0 -screen 0 1024x768x16 -nolisten tcp >/dev/null 2>&1 & cd /home/container/{{SERVER_DIR}} && wine BannerlordCoopServer.exe --no-tui --data-dir \"Z:\\\\home\\\\container\\\\{{DATA_DIR}}\"",
+    "config": {
+        "files": "{}",
+        "startup": "{\r\n    \"done\": \"phase\\\":\\\"serving\\\"\"\r\n}",
+        "logs": "{}",
+        "stop": "stop"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# Bannerlord Coop dedicated server — install\n#\n# Two paths, because the workshop item cannot be fetched anonymously\n# (verified: `+login anonymous +workshop_download_item 261550 3770450698`\n# returns \"ERROR! Download item ... failed (Failure)\"):\n#\n#   1. STEAM_USER/STEAM_PASS set -> SteamCMD downloads the workshop item with\n#      an account that owns Bannerlord. Steam Guard: pass the current code in\n#      STEAM_AUTH, or pre-seed the sentry by logging in once by hand.\n#   2. Otherwise -> nothing is downloaded. Upload the workshop item's contents\n#      yourself (SFTP/web file manager); the folder that matters is\n#      DedicatedServer/. Mod files are proprietary and are never bundled here.\n#\n# Either way the server owns its own data directory (--data-dir, DATA_DIR),\n# which is deliberately OUTSIDE the install folder so a reinstall or re-upload\n# can never take a world or a setting with it.\n\nset -u\n\nmkdir -p /mnt/server\ncd /mnt/server || exit 1\n\nif [[ -z \"${STEAM_USER:-}\" || -z \"${STEAM_PASS:-}\" ]]; then\n    echo \"-----------------------------------------\"\n    echo \"No Steam credentials set — skipping download.\"\n    echo \"Upload the workshop item's contents into /home/container so that\"\n    echo \"  /home/container/${SERVER_DIR:-DedicatedServer}/BannerlordCoopServer.exe\"\n    echo \"exists, then start the server.\"\n    echo \"-----------------------------------------\"\n    exit 0\nfi\n\napt -y update\napt -y --no-install-recommends install curl ca-certificates lib32gcc-s1 tar\n\nmkdir -p /mnt/server/steamcmd /mnt/server/steamapps\ncurl -sSL -o /tmp/steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\ntar -xzf /tmp/steamcmd.tar.gz -C /mnt/server/steamcmd\ncd /mnt/server/steamcmd || exit 1\n\nexport HOME=/mnt/server\nchown -R root:root /mnt\n\n./steamcmd.sh +force_install_dir /mnt/server \\\n    +login \"${STEAM_USER}\" \"${STEAM_PASS}\" ${STEAM_AUTH:-} \\\n    +workshop_download_item \"${SRCDS_APPID}\" \"${WORKSHOP_ID}\" \\\n    +quit\n\nITEM=\"/mnt/server/steamapps/workshop/content/${SRCDS_APPID}/${WORKSHOP_ID}\"\nif [[ ! -d \"${ITEM}\" ]]; then\n    echo \"ERROR: workshop item not downloaded (${ITEM} missing).\"\n    echo \"Most likely the account does not own Bannerlord, or Steam Guard\"\n    echo \"rejected the login. Fall back to uploading the files by hand.\"\n    exit 1\nfi\n\n# Keep the item's own layout — the server resolves engine/ relative to itself.\ncp -a \"${ITEM}\"/. /mnt/server/\nrm -rf /mnt/server/steamapps /mnt/server/steamcmd\n\necho \"-----------------------------------------\"\necho \"Installation completed — files in /home/container:\"\nls -1 /mnt/server\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/parkervcp/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Server directory",
+            "description": "Folder inside /home/container holding BannerlordCoopServer.exe. The workshop item puts it in DedicatedServer/.",
+            "env_variable": "SERVER_DIR",
+            "default_value": "DedicatedServer",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Data directory",
+            "description": "Folder inside /home/container for server-config.json, Game Saves and logs. Kept outside the install folder so re-uploading the server files never touches a world. Edit server-config.json here to set the password and save name.",
+            "env_variable": "DATA_DIR",
+            "default_value": "coop-data",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "X display",
+            "description": "The engine wants an X display even headless; the startup command runs Xvfb on this one. Do not change.",
+            "env_variable": "DISPLAY",
+            "default_value": ":0",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|max:8",
+            "field_type": "text"
+        },
+        {
+            "name": "Wine debug",
+            "description": "Wine log verbosity. -all keeps the console readable.",
+            "env_variable": "WINEDEBUG",
+            "default_value": "-all",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam app ID",
+            "description": "Bannerlord's app ID — the workshop item's consumer app.",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "261550",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|max:20",
+            "field_type": "text"
+        },
+        {
+            "name": "Workshop item ID",
+            "description": "Bannerlord Coop on the Steam Workshop.",
+            "env_variable": "WORKSHOP_ID",
+            "default_value": "3770450698",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string|max:20",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam username",
+            "description": "Account that OWNS Bannerlord. Required for the automated install — the workshop item is not downloadable anonymously. Leave empty to upload the files by hand instead.",
+            "env_variable": "STEAM_USER",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam password",
+            "description": "Password for the account above. Stored in the panel database in clear text — prefer clearing it after the install run.",
+            "env_variable": "STEAM_PASS",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam Guard code",
+            "description": "Current Steam Guard code, valid for one install run.",
+            "env_variable": "STEAM_AUTH",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "nullable|string|max:16",
+            "field_type": "text"
+        }
+    ]
+}
