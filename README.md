@@ -131,6 +131,10 @@ make help            # all targets
   treated that way; the one irreplaceable directory on the pool is pinned to a single
   disk so a drive death cannot take a share of everything.
 
+## License
+
+MIT, see [LICENSE](LICENSE).
+
 ---
 
 *Generated as a sanitized public mirror of a private homelab repo.*
